@@ -1,0 +1,14 @@
+torch
+torchvision
+albumentations
+pyyaml
+timm
+wandb
+python-dotenv
+numpy
+pandas
+scikit-learn
+matplotlib
+tqdm
+pillow
+opencv-python

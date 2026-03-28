@@ -298,6 +298,10 @@ tags
 pyvenv.cfg
 pip-selfcheck.json
 
+# conda
+.conda/
+
+
 ### VisualStudioCode ###
 .vscode/*
 !.vscode/settings.json
