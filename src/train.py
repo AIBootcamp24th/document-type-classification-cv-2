@@ -4,9 +4,9 @@ import csv
 from pathlib import Path
 
 import torch
+import wandb
 from dotenv import load_dotenv
 
-import wandb
 from src.config import load_config, parse_args
 from src.dataset.loader import build_train_valid_loaders
 from src.engine.loss import build_loss_fn
@@ -37,6 +37,24 @@ def save_checkpoint(model: torch.nn.Module, save_path: str | Path) -> None:
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), save_path)
+
+
+def should_log_epoch(epoch: int, total_epochs: int, log_interval: int) -> bool:
+    return epoch == 1 or epoch % log_interval == 0 or epoch == total_epochs
+
+
+def is_metric_improved(
+    current_score: float,
+    best_score: float,
+    mode: str,
+) -> bool:
+    if mode == "max":
+        return current_score > best_score
+    if mode == "min":
+        return current_score < best_score
+
+    msg = f"Unsupported early_stopping mode: {mode}"
+    raise ValueError(msg)
 
 
 def main() -> None:
@@ -106,8 +124,23 @@ def main() -> None:
             },
         )
 
-    best_score = float("-inf")
+    early_stopping_cfg = cfg.early_stopping
+    use_early_stopping = early_stopping_cfg.use
+    early_stopping_mode = early_stopping_cfg.mode
+    early_stopping_patience = early_stopping_cfg.patience
+    early_stopping_monitor = early_stopping_cfg.monitor
+
+    if early_stopping_mode == "max":
+        best_score = float("-inf")
+    elif early_stopping_mode == "min":
+        best_score = float("inf")
+    else:
+        msg = f"Unsupported early_stopping mode: {early_stopping_mode}"
+        raise ValueError(msg)
+
     best_model_path = Path(cfg.paths.checkpoint_dir) / "best.pt"
+    log_interval = max(1, int(cfg.logging.log_interval))
+    early_stopping_counter = 0
 
     for epoch in range(1, cfg.train.epochs + 1):
         train_metrics = train_one_epoch(
@@ -144,13 +177,18 @@ def main() -> None:
                 valid_metrics["f1_macro"],
             ])
 
-        logger.info(
-            f"[Epoch {epoch}/{cfg.train.epochs}] "
-            f"train_loss={train_metrics['loss']:.4f} "
-            f"train_{cfg.metric.primary}={train_metrics['primary_score']:.4f} "
-            f"valid_loss={valid_metrics['loss']:.4f} "
-            f"valid_{cfg.metric.primary}={valid_metrics['primary_score']:.4f}"
-        )
+        if should_log_epoch(
+            epoch=epoch,
+            total_epochs=cfg.train.epochs,
+            log_interval=log_interval,
+        ):
+            logger.info(
+                f"[Epoch {epoch}/{cfg.train.epochs}] "
+                f"train_loss={train_metrics['loss']:.4f} "
+                f"train_{cfg.metric.primary}={train_metrics['primary_score']:.4f} "
+                f"valid_loss={valid_metrics['loss']:.4f} "
+                f"valid_{cfg.metric.primary}={valid_metrics['primary_score']:.4f}"
+            )
 
         if use_wandb:
             wandb.log({
@@ -165,12 +203,36 @@ def main() -> None:
                 "valid/f1_macro": valid_metrics["f1_macro"],
             })
 
-        if valid_metrics["primary_score"] > best_score:
-            best_score = valid_metrics["primary_score"]
+        monitored_score = valid_metrics[early_stopping_monitor]
+        improved = is_metric_improved(
+            current_score=monitored_score,
+            best_score=best_score,
+            mode=early_stopping_mode,
+        )
+
+        if improved:
+            best_score = monitored_score
+            early_stopping_counter = 0
             save_checkpoint(model, best_model_path)
             logger.info(
-                f"best model saved | path={best_model_path} | score={best_score:.4f}"
+                f"best model saved | path={best_model_path} "
+                f"| {early_stopping_monitor}={best_score:.4f}"
             )
+        else:
+            early_stopping_counter += 1
+
+            if use_early_stopping:
+                logger.info(
+                    f"early stopping counter | "
+                    f"patience={early_stopping_counter}/{early_stopping_patience}"
+                )
+
+                if early_stopping_counter >= early_stopping_patience:
+                    logger.info(
+                        f"early stopping triggered | epoch={epoch} "
+                        f"| best_{early_stopping_monitor}={best_score:.4f}"
+                    )
+                    break
 
     if use_wandb:
         wandb.finish()
