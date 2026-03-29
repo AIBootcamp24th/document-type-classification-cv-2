@@ -1,0 +1,12 @@
+inference:
+  batch_size: 8
+  num_workers: 0
+  checkpoint_path: outputs/checkpoints/best.pt     # 추론시 불러올 모델 경로
+  prediction_col: target     # 제출 파일에 예측값 컬럼명을 통일하기 위한 값
+  tta:
+    use: false
+    num_augments: 1
+
+submission:
+  save_csv: true
+  file_name: final_submission.csv
