@@ -12,11 +12,10 @@ image:
   std: [0.229, 0.224, 0.225]
 
 split:
-  method: stratified     # stratified로 클래스 불균형 대응
+  method: stratified
   valid_ratio: 0.2
   shuffle: true
   random_state: 42
-  stratify: true
 
 augmentation:
   train:
