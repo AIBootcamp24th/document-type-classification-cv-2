@@ -23,14 +23,14 @@
 ### 테스트 데이터
 
 * 총 3,140장
-* 구겨짐, 빛번짐 등 다양한 노이즈 포함
+* 다양한 노이즈 포함
 
 ## 평가 방법
 
-* **Metric**: Macro F1 Score
+* Metric: Macro F1 Score
 * Confusion Matrix, Precision, Recall 활용
 
-반드시 **F1 Macro 기준으로 모델 평가**
+반드시 F1 Macro 기준으로 모델 평가
 
 ## 환경 설정 (Miniconda)
 
@@ -41,11 +41,29 @@ conda create -n cv_comp python=3.11 -y
 conda activate cv_comp
 ```
 
-### 2. 의존성 설치
+### 2. PyTorch 설치
+
+환경에 맞게 하나 선택
+
+```bash
+# CPU
+pip install torch torchvision
+
+# GPU (CUDA 12.x)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+### 3. 의존성 설치
 
 ```bash
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
+```
+
+### 4. Jupyter 커널 등록
+
+```bash
+python -m ipykernel install --user --name cv_comp --display-name "Python(cv_comp)"
 ```
 
 ## 환경 변수 설정 (.env)
@@ -54,13 +72,13 @@ pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-`.env` 파일에서 수정:
+`.env` 파일 수정:
 
 ```bash
-WANDB_API_KEY=your_api_key_here
+WANDB_API_KEY=your_api_key
+WANDB_ENTITY=your_entity
+WANDB_PROJECT=document-type-classification
 ```
-
-실험 기록은 Weights & Biases 사용
 
 ## 데이터 준비
 
@@ -70,10 +88,10 @@ tar -xvf data/data.tar.gz -C data/
 
 ```text
 data/raw/
-  ├── train/
-  ├── test/
-  ├── train.csv
-  └── sample_submission.csv
+├── train/
+├── test/
+├── train.csv
+└── sample_submission.csv
 ```
 
 ## 프로젝트 구조
@@ -124,10 +142,10 @@ python -m src.infer \
 
 ```text
 experiments/{your_name}/outputs/
-  ├── checkpoints/
-  ├── logs/
-  ├── metrics.csv
-  └── final_submission.csv
+├── checkpoints/
+├── logs/
+├── metrics.csv
+└── final_submission.csv
 ```
 
 ## 실험 흐름
@@ -147,26 +165,37 @@ experiments/{your_name}/experiment_note.md
 ## 작업 규칙
 
 * src 코드 수정 금지
-* config 기반 실험 진행
+* config 기반 실험
 * 개인 폴더에서 실행
-* 실험 결과는 다른 팀원들 연구에 도움이 될 수 있도록 기록
-
-## 핵심 원칙
-
-* 실험은 비교 가능해야 함
-* 결과보다 "왜"가 중요
-* config 기반 재현 가능
+* 실험 결과 반드시 기록
 
 ## 폴더 역할
 
-| 폴더       | 역할  |
-| -------- | --- |
-| template | 복사용 |
-| 개인폴더     | 실험용 |
+| 폴더 | 역할 |
+| -------- | -------------- |
+| template | 복사용 (직접 실행 금지) |
+| 개인폴더 | 실험용 |
+
+## 설치 확인 (터미널)
+
+```bash
+python - <<'PY'
+import torch
+import torchvision
+import albumentations
+import yaml
+import timm
+import wandb
+
+print("torch:", torch.__version__)
+print("cuda:", torch.cuda.is_available())
+print("environment setup ok")
+PY
+```
 
 ## 문제 해결
 
-상세 내용은 아래 문서 참고
+상세 내용:
 
 ```text
 docs/setup.md
