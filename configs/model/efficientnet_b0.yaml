@@ -1,0 +1,8 @@
+model:
+  name: efficientnet_b0
+  library: timm
+  pretrained: true
+  num_classes: 17
+  dropout: 0.2
+  drop_path_rate: 0.0
+  freeze_backbone: false

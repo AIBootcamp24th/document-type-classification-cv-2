@@ -1,0 +1,36 @@
+project:
+  name: document-type-classification
+  task: multiclass-image-classification
+  seed: 42
+  num_classes: 17
+  class_names: null
+
+paths:
+  data_dir: data
+  raw_dir: data/raw
+  processed_dir: data/processed
+  split_dir: data/split
+  train_csv: data/raw/train.csv
+  test_csv: data/raw/test.csv
+  sample_submission_csv: data/raw/sample_submission.csv
+  train_image_dir: data/raw/train
+  test_image_dir: data/raw/test
+  output_dir: outputs
+  checkpoint_dir: outputs/checkpoints
+  log_dir: outputs/logs
+  submission_dir: outputs/submissions
+
+runtime:
+  device: auto     # CPU, GPU에 따라 자동으로 감지
+  amp: true     # mixed precision 사용 여부 / GPU 환경에서 학습 속도와 메모리 측면에 유리
+  compile: false
+  benchmark: false
+  deterministic: false
+
+logging:
+  use_wandb: true
+  wandb_project: document-type-classification
+  wandb_entity: null
+  log_interval: 50
+  save_best_only: true
+  verbose: true

@@ -1,0 +1,7 @@
+model:
+  name: resnet50
+  library: torchvision
+  pretrained: false
+  num_classes: 17
+  dropout: 0.0
+  freeze_backbone: true
