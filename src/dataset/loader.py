@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedShuffleSplit, train_test_split
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit, train_test_split
 from torch.utils.data import DataLoader
 
 from src.dataset.dataset import DocumentDataset
@@ -71,6 +71,33 @@ def split_train_valid_dataframe(
 
     msg = f"Unsupported split method: {split_method}"
     raise ValueError(msg)
+
+
+def build_kfold_splits(
+    cfg: Any,
+    dataframe: pd.DataFrame,
+) -> list[tuple[list[int], list[int]]]:
+    split_method = cfg.split.method
+
+    if split_method != "stratified_kfold":
+        msg = f"Unsupported kfold split method: {split_method}"
+        raise ValueError(msg)
+
+    splitter = StratifiedKFold(
+        n_splits=cfg.split.n_splits,
+        shuffle=cfg.split.shuffle,
+        random_state=cfg.split.random_state,
+    )
+
+    splits: list[tuple[list[int], list[int]]] = []
+
+    for train_indices, valid_indices in splitter.split(
+        dataframe,
+        dataframe[cfg.data.label_col],
+    ):
+        splits.append((train_indices.tolist(), valid_indices.tolist()))
+
+    return splits
 
 
 def build_train_dataset(cfg: Any, train_df: pd.DataFrame) -> DocumentDataset:
@@ -140,10 +167,11 @@ def build_test_loader(cfg: Any, test_dataset: DocumentDataset) -> DataLoader:
     )
 
 
-def build_train_valid_loaders(cfg: Any) -> tuple[DataLoader, DataLoader]:
-    train_full_df = load_train_dataframe(cfg)
-    train_df, valid_df = split_train_valid_dataframe(cfg, train_full_df)
-
+def build_train_valid_loaders_from_dataframe(
+    cfg: Any,
+    train_df: pd.DataFrame,
+    valid_df: pd.DataFrame,
+) -> tuple[DataLoader, DataLoader]:
     train_dataset = build_train_dataset(cfg, train_df)
     valid_dataset = build_valid_dataset(cfg, valid_df)
 
@@ -151,6 +179,24 @@ def build_train_valid_loaders(cfg: Any) -> tuple[DataLoader, DataLoader]:
     valid_loader = build_valid_loader(cfg, valid_dataset)
 
     return train_loader, valid_loader
+
+
+def build_train_valid_loaders(cfg: Any) -> tuple[DataLoader, DataLoader]:
+    train_full_df = load_train_dataframe(cfg)
+    train_df, valid_df = split_train_valid_dataframe(cfg, train_full_df)
+    return build_train_valid_loaders_from_dataframe(cfg, train_df, valid_df)
+
+
+def build_train_valid_loaders_for_fold(
+    cfg: Any,
+    dataframe: pd.DataFrame,
+    train_indices: list[int],
+    valid_indices: list[int],
+) -> tuple[DataLoader, DataLoader]:
+    train_df = dataframe.iloc[train_indices].reset_index(drop=True)
+    valid_df = dataframe.iloc[valid_indices].reset_index(drop=True)
+
+    return build_train_valid_loaders_from_dataframe(cfg, train_df, valid_df)
 
 
 def build_test_loader_from_config(cfg: Any) -> DataLoader:

@@ -10,20 +10,20 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
-def _build_resize(resize_cfg: Any) -> A.BasicTransform:
+def _build_resize(resize_cfg: Any) -> Any:
     return A.Resize(
         height=resize_cfg.height,
         width=resize_cfg.width,
     )
 
 
-def _build_horizontal_flip(flip_cfg: Any) -> A.BasicTransform:
+def _build_horizontal_flip(flip_cfg: Any) -> Any:
     return A.HorizontalFlip(
         p=_get_attr(flip_cfg, "p", 0.5),
     )
 
 
-def _build_random_brightness_contrast(rbc_cfg: Any) -> A.BasicTransform:
+def _build_random_brightness_contrast(rbc_cfg: Any) -> Any:
     return A.RandomBrightnessContrast(
         brightness_limit=_get_attr(rbc_cfg, "brightness_limit", 0.2),
         contrast_limit=_get_attr(rbc_cfg, "contrast_limit", 0.2),
@@ -31,7 +31,7 @@ def _build_random_brightness_contrast(rbc_cfg: Any) -> A.BasicTransform:
     )
 
 
-def _build_affine(affine_cfg: Any) -> A.BasicTransform:
+def _build_affine(affine_cfg: Any) -> Any:
     return A.Affine(
         translate_percent=_get_attr(affine_cfg, "translate_percent", 0.05),
         scale=(
@@ -46,7 +46,19 @@ def _build_affine(affine_cfg: Any) -> A.BasicTransform:
     )
 
 
-def _build_normalize(cfg: Any, normalize_cfg: Any) -> A.BasicTransform:
+def _build_perspective(p_cfg: Any) -> Any:
+    scale_value = _get_attr(p_cfg, "scale", (0.03, 0.07))
+
+    if isinstance(scale_value, list):
+        scale_value = tuple(scale_value)
+
+    return A.Perspective(
+        scale=scale_value,
+        p=_get_attr(p_cfg, "p", 0.15),
+    )
+
+
+def _build_normalize(cfg: Any, normalize_cfg: Any) -> Any:
     return A.Normalize(
         mean=cfg.image.mean,
         std=cfg.image.std,
@@ -55,7 +67,7 @@ def _build_normalize(cfg: Any, normalize_cfg: Any) -> A.BasicTransform:
     )
 
 
-def _build_to_tensor() -> A.BasicTransform:
+def _build_to_tensor() -> Any:
     return ToTensorV2()
 
 
@@ -65,7 +77,7 @@ def build_transforms(cfg: Any, stage: str) -> A.Compose:
         raise ValueError(msg)
 
     stage_cfg = getattr(cfg.augmentation, stage)
-    transforms: list[A.BasicTransform] = []
+    transforms: list[Any] = []
 
     if hasattr(stage_cfg, "resize"):
         transforms.append(_build_resize(stage_cfg.resize))
@@ -80,6 +92,9 @@ def build_transforms(cfg: Any, stage: str) -> A.Compose:
 
     if hasattr(stage_cfg, "affine"):
         transforms.append(_build_affine(stage_cfg.affine))
+
+    if hasattr(stage_cfg, "perspective"):
+        transforms.append(_build_perspective(stage_cfg.perspective))
 
     if hasattr(stage_cfg, "normalize"):
         transforms.append(_build_normalize(cfg, stage_cfg.normalize))
