@@ -18,19 +18,30 @@ from src.utils.logger import setup_logger
 
 
 def get_device(device_config: str) -> torch.device:
+    if device_config == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+
     if device_config == "cuda":
         if not torch.cuda.is_available():
-            msg = "CUDA is not available, but cfg.runtime.device is set to 'cuda'."
+            msg = "runtime.device is set to 'cuda', but CUDA is not available."
             raise RuntimeError(msg)
         return torch.device("cuda")
+
+    if device_config == "mps":
+        if not torch.backends.mps.is_available():
+            msg = "runtime.device is set to 'mps', but MPS is not available."
+            raise RuntimeError(msg)
+        return torch.device("mps")
 
     if device_config == "cpu":
         return torch.device("cpu")
 
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-
-    return torch.device("cpu")
+    msg = f"Unsupported runtime.device: {device_config}"
+    raise ValueError(msg)
 
 
 def save_checkpoint(model: torch.nn.Module, save_path: str | Path) -> None:
@@ -98,6 +109,7 @@ def main() -> None:
         ])
 
     device = get_device(cfg.runtime.device)
+    logger.info(f"[DEVICE: {device.type.upper()}]")
 
     train_loader, valid_loader = build_train_valid_loaders(cfg)
 

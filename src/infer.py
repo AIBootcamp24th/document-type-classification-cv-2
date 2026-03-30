@@ -13,13 +13,39 @@ from src.utils.logger import setup_logger
 
 
 def get_device(device_config: str) -> torch.device:
-    if device_config == "cuda" and torch.cuda.is_available():
+    if device_config == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+
+    if device_config == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "runtime.device is set to 'cuda', but CUDA is not available."
+            )
         return torch.device("cuda")
-    return torch.device("cpu")
+
+    if device_config == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError(
+                "runtime.device is set to 'mps', but MPS is not available."
+            )
+        return torch.device("mps")
+
+    if device_config == "cpu":
+        return torch.device("cpu")
+
+    raise ValueError(f"Unsupported runtime.device: {device_config}")
 
 
-def load_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
-    state_dict = torch.load(path, map_location="cpu")
+def load_checkpoint(
+    model: torch.nn.Module,
+    path: str | Path,
+    device: torch.device,
+) -> None:
+    state_dict = torch.load(path, map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
 
 
@@ -46,11 +72,12 @@ def main() -> None:
     logger = setup_logger("src.infer", cfg.paths.log_dir)
 
     device = get_device(cfg.runtime.device)
+    logger.info(f"[DEVICE: {device.type.upper()}]")
 
     test_loader = build_test_loader_from_config(cfg)
 
     model = build_model(cfg).to(device)
-    load_checkpoint(model, cfg.inference.checkpoint_path)
+    load_checkpoint(model, cfg.inference.checkpoint_path, device)
 
     model.eval()
 
