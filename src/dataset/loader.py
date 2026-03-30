@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 import torch
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit, train_test_split
 from torch.utils.data import DataLoader
 
 from src.dataset.dataset import DocumentDataset
@@ -38,24 +38,39 @@ def load_test_dataframe(cfg: Any) -> pd.DataFrame:
 def split_train_valid_dataframe(
     cfg: Any, dataframe: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if cfg.split.method != "stratified":
-        msg = f"Unsupported split method: {cfg.split.method}"
-        raise ValueError(msg)
+    split_method = cfg.split.method
 
-    splitter = StratifiedShuffleSplit(
-        n_splits=1,
-        test_size=cfg.split.valid_ratio,
-        random_state=cfg.split.random_state,
-    )
+    if split_method == "stratified":
+        splitter = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=cfg.split.valid_ratio,
+            random_state=cfg.split.random_state,
+        )
 
-    train_indices, valid_indices = next(
-        splitter.split(dataframe, dataframe[cfg.data.label_col])
-    )
+        train_indices, valid_indices = next(
+            splitter.split(dataframe, dataframe[cfg.data.label_col])
+        )
 
-    train_df = dataframe.iloc[train_indices].reset_index(drop=True)
-    valid_df = dataframe.iloc[valid_indices].reset_index(drop=True)
+        train_df = dataframe.iloc[train_indices].reset_index(drop=True)
+        valid_df = dataframe.iloc[valid_indices].reset_index(drop=True)
 
-    return train_df, valid_df
+        return train_df, valid_df
+
+    if split_method == "random":
+        train_df, valid_df = train_test_split(
+            dataframe,
+            test_size=cfg.split.valid_ratio,
+            random_state=cfg.split.random_state,
+            shuffle=cfg.split.shuffle,
+        )
+
+        train_df = train_df.reset_index(drop=True)
+        valid_df = valid_df.reset_index(drop=True)
+
+        return train_df, valid_df
+
+    msg = f"Unsupported split method: {split_method}"
+    raise ValueError(msg)
 
 
 def build_train_dataset(cfg: Any, train_df: pd.DataFrame) -> DocumentDataset:
