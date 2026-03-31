@@ -49,6 +49,40 @@ def load_checkpoint(
     model.load_state_dict(state_dict)
 
 
+def build_kfold_checkpoint_paths(experiment_root: Path, n_splits: int) -> list[Path]:
+    checkpoint_paths: list[Path] = []
+
+    for fold_idx in range(1, n_splits + 1):
+        checkpoint_path = (
+            experiment_root
+            / "outputs"
+            / f"fold_{fold_idx}"
+            / "checkpoints"
+            / "best.pt"
+        )
+
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"KFold checkpoint not found: {checkpoint_path}"
+            )
+
+        checkpoint_paths.append(checkpoint_path)
+
+    return checkpoint_paths
+
+
+def load_ensemble_models(cfg, device: torch.device, checkpoint_paths: list[Path]) -> list[torch.nn.Module]:
+    models_list: list[torch.nn.Module] = []
+
+    for checkpoint_path in checkpoint_paths:
+        model = build_model(cfg).to(device)
+        load_checkpoint(model, checkpoint_path, device)
+        model.eval()
+        models_list.append(model)
+
+    return models_list
+
+
 def main() -> None:
     args = parse_args()
 
@@ -65,9 +99,6 @@ def main() -> None:
     cfg.paths.output_dir = str(experiment_root / "outputs")
     cfg.paths.checkpoint_dir = str(experiment_root / "outputs" / "checkpoints")
     cfg.paths.log_dir = str(experiment_root / "outputs" / "logs")
-    cfg.inference.checkpoint_path = str(
-        experiment_root / "outputs" / "checkpoints" / "best.pt"
-    )
 
     logger = setup_logger("src.infer", cfg.paths.log_dir)
 
@@ -76,10 +107,23 @@ def main() -> None:
 
     test_loader = build_test_loader_from_config(cfg)
 
-    model = build_model(cfg).to(device)
-    load_checkpoint(model, cfg.inference.checkpoint_path, device)
+    if cfg.split.method != "stratified_kfold":
+        raise ValueError(
+            "This inference script is intended for KFold ensemble inference. "
+            f"Current split.method={cfg.split.method}"
+        )
 
-    model.eval()
+    checkpoint_paths = build_kfold_checkpoint_paths(
+        experiment_root=experiment_root,
+        n_splits=cfg.split.n_splits,
+    )
+    logger.info(f"[KFold ensemble] checkpoints={len(checkpoint_paths)}")
+
+    ensemble_models = load_ensemble_models(
+        cfg=cfg,
+        device=device,
+        checkpoint_paths=checkpoint_paths,
+    )
 
     preds = []
     image_names = []
@@ -87,8 +131,22 @@ def main() -> None:
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="inference"):
             images = batch["image"].to(device)
-            outputs = model(images)
-            pred = torch.argmax(outputs, dim=1)
+
+            logits_sum = None
+
+            for model in ensemble_models:
+                outputs = model(images)
+
+                if logits_sum is None:
+                    logits_sum = outputs
+                else:
+                    logits_sum += outputs
+
+            if logits_sum is None:
+                raise RuntimeError("No ensemble outputs were produced.")
+
+            logits_mean = logits_sum / len(ensemble_models)
+            pred = torch.argmax(logits_mean, dim=1)
 
             preds.extend(pred.cpu().numpy())
             image_names.extend(batch["image_name"])
