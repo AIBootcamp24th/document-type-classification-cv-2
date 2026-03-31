@@ -96,6 +96,37 @@ def _build_vertical_flip(flip_cfg: Any) -> A.BasicTransform:
     )
 
 
+def _build_perspective(p_cfg: Any) -> A.BasicTransform:
+    return A.Perspective(
+        scale=_get_attr(p_cfg, "scale", (0.05, 0.1)),
+        p=_get_attr(p_cfg, "p", 0.5),
+    )
+
+
+def _build_clahe(clahe_cfg: Any) -> A.BasicTransform:
+    return A.CLAHE(
+        clip_limit=_get_attr(clahe_cfg, "clip_limit", 4.0),
+        tile_grid_size=_get_attr(clahe_cfg, "tile_grid_size", (8, 8)),
+        p=_get_attr(clahe_cfg, "p", 0.5),
+    )
+
+
+def _build_sharpen(sharpen_cfg: Any) -> A.BasicTransform:
+    return A.Sharpen(
+        alpha=_get_attr(sharpen_cfg, "alpha", (0.2, 0.5)),
+        lightness=_get_attr(sharpen_cfg, "lightness", (0.5, 1.0)),
+        p=_get_attr(sharpen_cfg, "p", 0.5),
+    )
+
+
+def _build_grid_distortion(grid_cfg: Any) -> A.BasicTransform:
+    return A.GridDistortion(
+        num_steps=_get_attr(grid_cfg, "num_steps", 5),
+        distort_limit=_get_attr(grid_cfg, "distort_limit", 0.3),
+        p=_get_attr(grid_cfg, "p", 0.5),
+    )
+
+
 def build_transforms(cfg: Any, stage: str) -> A.Compose:
     if stage not in {"train", "valid", "test"}:
         msg = f"Unsupported stage: {stage}. Expected one of: train, valid, test."
@@ -132,6 +163,18 @@ def build_transforms(cfg: Any, stage: str) -> A.Compose:
 
     if hasattr(stage_cfg, "vertical_flip"):
         transforms.append(_build_vertical_flip(stage_cfg.vertical_flip))
+
+    if hasattr(stage_cfg, "perspective"):
+        transforms.append(_build_perspective(stage_cfg.perspective))
+
+    if hasattr(stage_cfg, "clahe"):
+        transforms.append(_build_clahe(stage_cfg.clahe))
+
+    if hasattr(stage_cfg, "sharpen"):
+        transforms.append(_build_sharpen(stage_cfg.sharpen))
+
+    if hasattr(stage_cfg, "grid_distortion"):
+        transforms.append(_build_grid_distortion(stage_cfg.grid_distortion))
 
     if hasattr(stage_cfg, "normalize"):
         transforms.append(_build_normalize(cfg, stage_cfg.normalize))
