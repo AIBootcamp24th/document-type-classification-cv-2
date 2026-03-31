@@ -17,32 +17,61 @@ def unfreeze_classifier_parameters(module: nn.Module) -> None:
         param.requires_grad = True
 
 
+def _build_resnet_classifier(
+    in_features: int,
+    num_classes: int,
+    dropout: float,
+) -> nn.Module:
+    if dropout > 0:
+        return nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, num_classes),
+        )
+    return nn.Linear(in_features, num_classes)
+
+
 def build_torchvision_model(cfg: Any) -> nn.Module:
     model_name = cfg.model.name
     num_classes = cfg.model.num_classes
     pretrained = cfg.model.pretrained
+    dropout = cfg.model.dropout
 
-    if model_name == "resnet50":
-        weights = models.ResNet50_Weights.DEFAULT if pretrained else None
-        model = models.resnet50(weights=weights)
+    supported_resnet_models = {
+        "resnet18": models.resnet18,
+        "resnet34": models.resnet34,
+        "resnet50": models.resnet50,
+        "resnet101": models.resnet101,
+        "resnet152": models.resnet152,
+    }
 
-        in_features = model.fc.in_features
-        if cfg.model.dropout > 0:
-            model.fc = nn.Sequential(
-                nn.Dropout(p=cfg.model.dropout),
-                nn.Linear(in_features, num_classes),
-            )
-        else:
-            model.fc = nn.Linear(in_features, num_classes)
+    weights_map = {
+        "resnet18": models.ResNet18_Weights.DEFAULT,
+        "resnet34": models.ResNet34_Weights.DEFAULT,
+        "resnet50": models.ResNet50_Weights.DEFAULT,
+        "resnet101": models.ResNet101_Weights.DEFAULT,
+        "resnet152": models.ResNet152_Weights.DEFAULT,
+    }
 
-        if cfg.model.freeze_backbone:
-            freeze_backbone_parameters(model)
-            unfreeze_classifier_parameters(model.fc)
+    model_fn = supported_resnet_models.get(model_name)
+    if model_fn is None:
+        msg = f"Unsupported torchvision model: {model_name}"
+        raise ValueError(msg)
 
-        return model
+    weights = weights_map[model_name] if pretrained else None
+    model = model_fn(weights=weights)
 
-    msg = f"Unsupported torchvision model: {model_name}"
-    raise ValueError(msg)
+    in_features = model.fc.in_features
+    model.fc = _build_resnet_classifier(
+        in_features=in_features,
+        num_classes=num_classes,
+        dropout=dropout,
+    )
+
+    if cfg.model.freeze_backbone:
+        freeze_backbone_parameters(model)
+        unfreeze_classifier_parameters(model.fc)
+
+    return model
 
 
 def build_timm_model(cfg: Any) -> nn.Module:
