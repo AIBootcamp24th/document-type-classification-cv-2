@@ -49,24 +49,31 @@ def load_checkpoint(
     model.load_state_dict(state_dict)
 
 
-def build_kfold_checkpoint_paths(experiment_root: Path, n_splits: int) -> list[Path]:
+def build_kfold_checkpoint_paths(
+    output_dir: str | Path,
+    checkpoint_path: str | Path,
+    n_splits: int,
+) -> list[Path]:
     checkpoint_paths: list[Path] = []
 
+    output_dir = Path(output_dir).resolve()
+    checkpoint_path = Path(checkpoint_path)
+
+    relative_checkpoint_path = checkpoint_path.relative_to("outputs")
+
     for fold_idx in range(1, n_splits + 1):
-        checkpoint_path = (
-            experiment_root
-            / "outputs"
+        fold_checkpoint_path = (
+            output_dir
             / f"fold_{fold_idx}"
-            / "checkpoints"
-            / "best.pt"
+            / relative_checkpoint_path
         )
 
-        if not checkpoint_path.exists():
+        if not fold_checkpoint_path.exists():
             raise FileNotFoundError(
-                f"KFold checkpoint not found: {checkpoint_path}"
+                f"KFold checkpoint not found: {fold_checkpoint_path}"
             )
 
-        checkpoint_paths.append(checkpoint_path)
+        checkpoint_paths.append(fold_checkpoint_path)
 
     return checkpoint_paths
 
@@ -114,7 +121,8 @@ def main() -> None:
         )
 
     checkpoint_paths = build_kfold_checkpoint_paths(
-        experiment_root=experiment_root,
+        output_dir=cfg.paths.output_dir,
+        checkpoint_path=cfg.inference.checkpoint_path,
         n_splits=cfg.split.n_splits,
     )
     logger.info(f"[KFold ensemble] checkpoints={len(checkpoint_paths)}")
