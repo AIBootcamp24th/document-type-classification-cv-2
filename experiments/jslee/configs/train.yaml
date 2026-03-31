@@ -1,0 +1,42 @@
+# 학습 하이퍼파라미터 담당
+
+train:
+  epochs: 30
+  train_batch_size: 16
+  valid_batch_size: 16
+  grad_accum_steps: 1
+  max_grad_norm: null
+  resume_path: null
+
+optimizer:
+  name: adamw
+  lr: 0.0003
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  eps: 0.00000001
+
+scheduler:
+  use: true
+  name: cosineannealinglr
+  t_max: 10
+  eta_min: 0.000001
+  step_unit: epoch
+
+loss:
+  name: cross_entropy
+  label_smoothing: 0.0
+
+metric:
+  primary: f1_macro
+  secondary:
+    - accuracy
+    - f1_micro
+
+early_stopping:
+  use: true
+  patience: 10
+  mode: max
+  monitor: f1_macro
+
+sampler:
+  use_weighted_sampler: false
