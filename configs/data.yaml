@@ -12,10 +12,12 @@ image:
   std: [0.229, 0.224, 0.225]
 
 split:
-  method: stratified
+  method: stratified_kfold
+  n_splits: 5
   valid_ratio: 0.2
   shuffle: true
   random_state: 42
+  stratify: true
 
 augmentation:
   train:
