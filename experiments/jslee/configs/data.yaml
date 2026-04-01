@@ -1,3 +1,7 @@
+# PR 18: 추가 기능:
+# GaussianBlur, GaussNoise, ColorJitter, RandomRotate90, VerticalFlip, CLAHE, Sharpen, GridDistortion
+# (src/datasets/transforms.py에서 확인 가능)
+
 data:
   image_col: ID
   label_col: target
