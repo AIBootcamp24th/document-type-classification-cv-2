@@ -219,7 +219,17 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
         )
 
         if scheduler is not None:
-            scheduler.step()
+            if isinstance(scheduler, dict):
+                warmup_epochs = scheduler["warmup_epochs"]
+
+                if epoch <= warmup_epochs:
+                    scheduler["warmup"].step()
+                else:
+                    scheduler["main"].step()
+            else:
+                scheduler.step()
+            
+        current_lr = optimizer.param_groups[0]["lr"]
 
         append_metrics_row(metrics_path, epoch, train_metrics, valid_metrics)
 
@@ -239,6 +249,7 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
         if use_wandb:
             wandb.log({
                 "epoch": epoch,
+                "lr": current_lr,
                 "train/loss": train_metrics["loss"],
                 "train/accuracy": train_metrics["accuracy"],
                 "train/f1_micro": train_metrics["f1_micro"],
@@ -387,7 +398,18 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             )
 
             if scheduler is not None:
-                scheduler.step()
+                if isinstance(scheduler, dict):
+                    warmup_epochs = scheduler["warmup_epochs"]
+
+                    if epoch <= warmup_epochs:
+                        scheduler["warmup"].step()
+                    else:
+                        scheduler["main"].step()
+                else:
+                    scheduler.step()
+            
+            current_lr = optimizer.param_groups[0]["lr"]
+
 
             append_metrics_row(fold_metrics_path, epoch, train_metrics, valid_metrics)
 
@@ -409,6 +431,7 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 wandb.log({
                     "epoch": epoch,
                     "fold": fold_idx,
+                    "lr": current_lr,
                     "train/loss": train_metrics["loss"],
                     "train/accuracy": train_metrics["accuracy"],
                     "train/f1_micro": train_metrics["f1_micro"],
