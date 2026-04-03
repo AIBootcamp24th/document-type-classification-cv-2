@@ -1,7 +1,7 @@
 # 학습 하이퍼파라미터 담당
 
 train:
-  epochs: 1
+  epochs: 30
   train_batch_size: 16
   valid_batch_size: 8
   grad_accum_steps: 1
