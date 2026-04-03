@@ -1,7 +1,10 @@
 model:
   name: resnet50
   library: torchvision
-  pretrained: false
-  num_classes: 17
-  dropout: 0.0
-  freeze_backbone: true
+  pretrained: true
+  num_classes: 17     # 프로젝트 클래스와 반드시 동일하게 입력
+  dropout: 0.2
+  freeze_backbone: false
+
+experiment:
+  name: resnet50

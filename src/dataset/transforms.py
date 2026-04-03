@@ -10,10 +10,19 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
-def _build_resize(resize_cfg: Any) -> A.BasicTransform:
+def _build_resize(resize_cfg: Any, cfg: Any) -> A.BasicTransform:
+    height = resize_cfg.height
+    width = resize_cfg.width
+
+    model_name = cfg.model.name.lower()
+
+    if "deit" in model_name or "vit" in model_name:
+        height = 224
+        width = 224
+
     return A.Resize(
-        height=resize_cfg.height,
-        width=resize_cfg.width,
+        height=height,
+        width=width,
     )
 
 
@@ -68,8 +77,6 @@ def _build_gaussian_blur(blur_cfg: Any) -> A.BasicTransform:
 
 def _build_gauss_noise(noise_cfg: Any) -> A.BasicTransform:
     return A.GaussNoise(
-        var_limit=_get_attr(noise_cfg, "var_limit", (10.0, 50.0)),
-        mean=_get_attr(noise_cfg, "mean", 0),
         p=_get_attr(noise_cfg, "p", 0.5),
     )
 
@@ -136,7 +143,7 @@ def build_transforms(cfg: Any, stage: str) -> A.Compose:
     transforms: list[A.BasicTransform] = []
 
     if hasattr(stage_cfg, "resize"):
-        transforms.append(_build_resize(stage_cfg.resize))
+        transforms.append(_build_resize(stage_cfg.resize, cfg))
 
     if hasattr(stage_cfg, "horizontal_flip"):
         transforms.append(_build_horizontal_flip(stage_cfg.horizontal_flip))
