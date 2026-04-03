@@ -1,8 +1,8 @@
 # 학습 하이퍼파라미터 담당
 
 train:
-  epochs: 1
-  train_batch_size: 4
+  epochs: 30
+  train_batch_size: 16
   valid_batch_size: 8
   grad_accum_steps: 1
   max_grad_norm: null
@@ -10,7 +10,7 @@ train:
 
 optimizer:
   name: adamw
-  lr: 0.0003
+  lr: 0.00036 #0.0003 # 0.0004
   weight_decay: 0.0001
   betas: [0.9, 0.999]
   eps: 0.00000001
@@ -18,13 +18,18 @@ optimizer:
 scheduler:
   use: true
   name: cosineannealinglr
-  t_max: 10
+  t_max: 27 # warmup use:true인 경우 epochs - warmup_epochs / warmup use:false인 경우, epochs에 일치
   eta_min: 0.000001
   step_unit: epoch
 
+  warmup:
+    use: true
+    warmup_epochs: 3
+    warmup_start_lr: 0.00001
+
 loss:
   name: cross_entropy
-  label_smoothing: 0.0
+  label_smoothing: 0.1
 
 metric:
   primary: f1_macro

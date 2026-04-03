@@ -1,6 +1,6 @@
 model:
+  name: deit_tiny_patch16_224
   library: timm
-  name: efficientnet_b0
   pretrained: true
   num_classes: 17
   dropout: 0.2
@@ -8,4 +8,4 @@ model:
   freeze_backbone: false
 
 experiment:
-  name: efficientnet_b0
+  name: deit_tiny

@@ -31,10 +31,8 @@ def get_device(device_config: str) -> torch.device:
         return torch.device("cpu")
 
     if device_config == "cuda":
-        if not torch.cuda.is_available():
-            msg = "runtime.device is set to 'cuda', but CUDA is not available."
-            raise RuntimeError(msg)
-        return torch.device("cuda")
+        msg = "runtime.device is set to 'cuda', but CUDA is not available."
+        raise RuntimeError(msg)
 
     if device_config == "mps":
         if not torch.backends.mps.is_available():
@@ -73,13 +71,38 @@ def is_metric_improved(
     raise ValueError(msg)
 
 
-def initialize_output_paths(cfg, experiment_root: Path) -> None:
-    cfg.paths.output_dir = str(experiment_root / "outputs")
-    cfg.paths.checkpoint_dir = str(experiment_root / "outputs" / "checkpoints")
-    cfg.paths.log_dir = str(experiment_root / "outputs" / "logs")
-    cfg.inference.checkpoint_path = str(
-        experiment_root / "outputs" / "checkpoints" / "best.pt"
-    )
+def get_experiment_name(cfg) -> str:
+    experiment = getattr(cfg, "experiment", None)
+    experiment_name = getattr(experiment, "name", None)
+
+    if experiment_name:
+        return experiment_name
+
+    return cfg.model.name
+
+
+def resolve_execution_root(*path_candidates: str | Path) -> Path:
+    for path_candidate in path_candidates:
+        path = Path(path_candidate).resolve()
+        config_dir = path.parent if path.is_file() else path
+
+        if (
+            config_dir.name == "configs"
+            and config_dir.parent.parent.name == "experiments"
+        ):
+            return config_dir.parent
+
+    return Path.cwd()
+
+
+def initialize_output_paths(cfg, project_root: Path) -> None:
+    experiment_name = get_experiment_name(cfg)
+    output_root = project_root / "outputs" / experiment_name
+
+    cfg.paths.output_dir = str(output_root)
+    cfg.paths.checkpoint_dir = str(output_root / "checkpoints")
+    cfg.paths.log_dir = str(output_root / "logs")
+    cfg.inference.checkpoint_path = str(output_root / "checkpoints" / "best.pt")
 
 
 def write_metrics_header(metrics_path: Path) -> None:
@@ -123,6 +146,7 @@ def append_metrics_row(
 
 def build_wandb_config(cfg, device: torch.device) -> dict:
     return {
+        "experiment_name": get_experiment_name(cfg),
         "model_name": cfg.model.name,
         "epochs": cfg.train.epochs,
         "train_batch_size": cfg.train.train_batch_size,
@@ -173,11 +197,13 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
     scheduler = build_scheduler(cfg, optimizer)
 
     use_wandb = cfg.logging.use_wandb
+    experiment_name = get_experiment_name(cfg)
+
     if use_wandb:
         init_wandb_run(
             cfg=cfg,
-            run_name="single-split",
-            group_name="single-split",
+            run_name=f"{experiment_name}-single-split",
+            group_name=experiment_name,
             run_dir=cfg.paths.output_dir,
             device=device,
         )
@@ -221,14 +247,13 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
         if scheduler is not None:
             if isinstance(scheduler, dict):
                 warmup_epochs = scheduler["warmup_epochs"]
-
                 if epoch <= warmup_epochs:
                     scheduler["warmup"].step()
                 else:
                     scheduler["main"].step()
             else:
                 scheduler.step()
-            
+
         current_lr = optimizer.param_groups[0]["lr"]
 
         append_metrics_row(metrics_path, epoch, train_metrics, valid_metrics)
@@ -312,7 +337,7 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
     fold_results: list[dict[str, float | int]] = []
     log_interval = max(1, int(cfg.logging.log_interval))
     use_wandb = cfg.logging.use_wandb
-    kfold_group_name = f"{cfg.model.name}-kfold"
+    kfold_group_name = f"{get_experiment_name(cfg)}-kfold"
 
     with open(summary_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -354,7 +379,7 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
         if use_wandb:
             wandb_run = init_wandb_run(
                 cfg=cfg,
-                run_name=f"fold-{fold_idx}",
+                run_name=f"{get_experiment_name(cfg)}-fold-{fold_idx}",
                 group_name=kfold_group_name,
                 run_dir=str(fold_output_dir),
                 device=device,
@@ -400,16 +425,14 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             if scheduler is not None:
                 if isinstance(scheduler, dict):
                     warmup_epochs = scheduler["warmup_epochs"]
-
                     if epoch <= warmup_epochs:
                         scheduler["warmup"].step()
                     else:
                         scheduler["main"].step()
                 else:
                     scheduler.step()
-            
-            current_lr = optimizer.param_groups[0]["lr"]
 
+            current_lr = optimizer.param_groups[0]["lr"]
 
             append_metrics_row(fold_metrics_path, epoch, train_metrics, valid_metrics)
 
@@ -544,9 +567,9 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
     logger.info(f"[KFold] std_valid_f1_macro={std_f1_macro:.4f}")
 
     if use_wandb:
-        summary_run = init_wandb_run(
+        init_wandb_run(
             cfg=cfg,
-            run_name="kfold-summary",
+            run_name=f"{get_experiment_name(cfg)}-kfold-summary",
             group_name=kfold_group_name,
             run_dir=cfg.paths.output_dir,
             device=device,
@@ -575,13 +598,20 @@ def main() -> None:
         model_path=args.model,
     )
 
-    experiment_root = Path(args.train).resolve().parents[1]
-    initialize_output_paths(cfg, experiment_root)
+    project_root = resolve_execution_root(
+        args.data,
+        args.train,
+        args.inference,
+        args.model,
+    )
+    initialize_output_paths(cfg, project_root)
 
     logger = setup_logger("src.train", cfg.paths.log_dir)
 
     device = get_device(cfg.runtime.device)
     logger.info(f"[DEVICE: {device.type.upper()}]")
+    logger.info(f"[EXPERIMENT: {get_experiment_name(cfg)}]")
+    logger.info(f"[OUTPUT DIR: {cfg.paths.output_dir}]")
 
     if cfg.split.method == "stratified_kfold":
         run_kfold_training(cfg=cfg, device=device, logger=logger)

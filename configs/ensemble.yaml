@@ -1,0 +1,24 @@
+ensemble:
+  file_name: ensemble_submission.csv
+  prediction_col: target
+
+  members:
+    - name: resnet50
+      model_path: configs/model/resnet50.yaml
+      output_dir: outputs/resnet50
+      weight: 0.4
+
+    - name: efficientnet_b0
+      model_path: configs/model/efficientnet_b0.yaml
+      output_dir: outputs/efficientnet_b0
+      weight: 0.3
+
+    - name: convnext_tiny
+      model_path: configs/model/convnext_tiny.yaml
+      output_dir: outputs/convnext_tiny
+      weight: 0.2
+
+    - name: deit_tiny
+      model_path: configs/model/deit_tiny.yaml
+      output_dir: outputs/deit_tiny
+      weight: 0.1

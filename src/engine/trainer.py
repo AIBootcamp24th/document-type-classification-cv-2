@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import torch
-from src.utils.metric import compute_metrics, get_primary_metric
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+from src.utils.metric import compute_metrics, get_primary_metric
 
 
 def train_one_epoch(
@@ -24,7 +26,14 @@ def train_one_epoch(
     all_preds: list[int] = []
     all_targets: list[int] = []
 
-    progress_bar = tqdm(loader, desc="train", leave=False)
+    progress_bar = tqdm(
+        loader,
+        desc="train",
+        leave=False,
+        disable=not cfg.logging.verbose,
+        file=sys.stdout,
+        dynamic_ncols=True,
+    )
 
     for batch in progress_bar:
         images = batch["image"].to(device)
@@ -70,7 +79,14 @@ def valid_one_epoch(
     all_preds: list[int] = []
     all_targets: list[int] = []
 
-    progress_bar = tqdm(loader, desc="valid", leave=False)
+    progress_bar = tqdm(
+        loader,
+        desc="validation",
+        leave=False,
+        disable=not cfg.logging.verbose,
+        file=sys.stdout,
+        dynamic_ncols=True,
+    )
 
     for batch in progress_bar:
         images = batch["image"].to(device)

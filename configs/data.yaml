@@ -6,7 +6,7 @@ data:
   persistent_workers: false
 
 image:
-  size: 224     # 모델 input 크기 설정
+  size: 512     # 모델 input 크기 설정
   channels: 3
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
@@ -14,7 +14,6 @@ image:
 split:
   method: stratified_kfold
   n_splits: 5
-  valid_ratio: 0.2
   shuffle: true
   random_state: 42
   stratify: true
@@ -22,8 +21,8 @@ split:
 augmentation:
   train:
     resize:
-      height: 224
-      width: 224
+      height: 512
+      width: 512
 
     horizontal_flip:
       p: 0.5
@@ -34,10 +33,46 @@ augmentation:
       contrast_limit: 0.2
 
     affine:
-      p: 0.3
+      p: 0.2
       translate_percent: 0.05
       scale_limit: 0.1
-      rotate_limit: 5
+      rotate_limit: 15
+
+    gaussian_blur:
+      p: 0.2
+      blur_limit: [3, 7]
+
+    gauss_noise:
+      p: 0.2
+
+    color_jitter:
+      p: 0.3
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+
+    random_rotate_90:
+      p: 0.3
+
+    perspective:
+      p: 0.2
+      scale: [0.05, 0.1]
+
+    clahe:
+      p: 0.2
+      clip_limit: 4.0
+      tile_grid_size: [8, 8]
+
+    sharpen:
+      p: 0.2
+      alpha: [0.2, 0.5]
+      lightness: [0.5, 1.0]
+
+    grid_distortion:
+      p: 0.2
+      num_steps: 5
+      distort_limit: 0.3
 
     normalize:
       p: 1.0
@@ -47,8 +82,8 @@ augmentation:
 
   valid:
     resize:
-      height: 224
-      width: 224
+      height: 512
+      width: 512
 
     normalize:
       p: 1.0
@@ -58,8 +93,8 @@ augmentation:
 
   test:
     resize:
-      height: 224
-      width: 224
+      height: 512
+      width: 512
 
     normalize:
       p: 1.0
