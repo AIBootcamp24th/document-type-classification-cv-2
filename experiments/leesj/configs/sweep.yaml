@@ -1,0 +1,60 @@
+# 자동 하이퍼파라미터 탐색 실행 파일
+program: /data/ephemeral/home/workspace/document-type-classification-cv-2/src/train.py
+
+method: bayes
+
+entity: cv-team2
+project: document-type-classification #leesj-experiment
+
+metric:
+  name: valid/f1_macro
+  goal: maximize
+
+command:
+  - ${env}
+  - python
+  - -m
+  - src.train
+  - --base
+  - configs/base.yaml
+  - --data
+  - experiments/{your_name}/configs/data.yaml
+  - --train
+  - experiments/{your_name}/configs/train.yaml
+  - --inference
+  - experiments/{your_name}/configs/inference.yaml
+  - --model
+  - experiments/{your_name}/configs/model.yaml
+
+  # 경로 문제 있을 시 참조
+  # - document-type-classification-cv-2/configs/base.yaml
+  # - --data
+  # - document-type-classification-cv-2/experiments/{your_name}/configs/data.yaml
+  # - --train
+  # - document-type-classification-cv-2/experiments/{your_name}/configs/train.yaml
+  # - --inference
+  # - document-type-classification-cv-2/experiments/{your_name}/configs/inference.yaml
+  # - --model
+  # - document-type-classification-cv-2/experiments/{your_name}/configs/model.yaml
+
+parameters:
+  logging.use_wandb:
+    value: true
+
+  optimizer.lr:
+    values: [0.00025, 0.0004]
+
+  optimizer.weight_decay:
+    values: [0.00005, 0.0002]
+
+  train.train_batch_size:
+    values: [16, 32]
+
+  loss.label_smoothing:
+    values: [0.05, 0.1]
+    
+  train.warmup_epochs:
+    values: [3, 5, 7]
+
+  scheduler.t_max:
+    values: [20, 22, 25]

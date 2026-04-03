@@ -18,7 +18,7 @@ optimizer:
 scheduler:
   use: true
   name: cosineannealinglr
-  t_max: 27 # warmup use:true인 경우 epochs - warmup_epochs / warmup use:false인 경우, epochs에 일치
+  t_max: 10 # warmup use:true인 경우 epochs - warmup_epochs / warmup use:false인 경우, epochs에 일치
   eta_min: 0.000001
   step_unit: epoch
 

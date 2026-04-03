@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import csv
 from pathlib import Path
 
 import torch
 import wandb
+import yaml
 from dotenv import load_dotenv
 
 from src.config import load_config, parse_args
@@ -45,6 +47,34 @@ def get_device(device_config: str) -> torch.device:
 
     msg = f"Unsupported runtime.device: {device_config}"
     raise ValueError(msg)
+
+
+def set_by_path(cfg, path: str, value) -> None:
+    keys = path.split(".")
+    obj = cfg
+    for key in keys[:-1]:
+        if not hasattr(obj, key):
+            raise KeyError(f"[SWEEP ERROR] Invalid path: {path}")
+        obj = getattr(obj, key)
+    setattr(obj, keys[-1], value)
+
+
+def get_by_path(cfg, path: str):
+    keys = path.split(".")
+    obj = cfg
+    for key in keys:
+        obj = getattr(obj, key)
+    return obj
+
+
+def to_dict(obj):
+    if hasattr(obj, "__dict__"):
+        return {k: to_dict(v) for k, v in obj.__dict__.items()}
+    if isinstance(obj, dict):
+        return {k: to_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_dict(v) for v in obj]
+    return obj
 
 
 def save_checkpoint(model: torch.nn.Module, save_path: str | Path) -> None:
@@ -185,16 +215,71 @@ def init_wandb_run(
     )
 
 
+def apply_sweep_overrides(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    sweep_cfg = wandb.config
+
+    for key, value in dict(sweep_cfg).items():
+        if "." not in key:
+            continue
+        set_by_path(cfg, key, value)
+        logger.info(f"[SWEEP APPLY] {key} = {value}")
+
+    wandb.config.update(
+        {key: get_by_path(cfg, key) for key in dict(sweep_cfg).keys() if "." in key},
+        allow_val_change=True,
+    )
+
+
+def save_sweep_config(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    config_save_path = Path(cfg.paths.output_dir) / "config.yaml"
+    config_save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(config_save_path, "w", encoding="utf-8") as f:
+        yaml.dump(to_dict(cfg), f, default_flow_style=False, allow_unicode=True)
+
+    logger.info(f"[SWEEP CONFIG SAVED] {config_save_path}")
+
+
+def log_sweep_config(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    logger.info("===== SWEEP RUN START =====")
+    logger.info(f"[RUN] {wandb.run.name} ({wandb.run.id})")
+    for key in dict(wandb.config).keys():
+        if "." not in key:
+            continue
+        value = get_by_path(cfg, key)
+        logger.info(f"{key}: {value}")
+    logger.info("===========================")
+
+
+def log_effective_hparams(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    logger.info("===== EFFECTIVE HYPERPARAMETERS =====")
+    for key in dict(wandb.config).keys():
+        if "." not in key:
+            continue
+        value = get_by_path(cfg, key)
+        logger.info(f"{key}: {value}")
+    logger.info("====================================")
+
+
 def run_single_split_training(cfg, device: torch.device, logger) -> None:
     metrics_path = Path(cfg.paths.output_dir) / "metrics.csv"
     write_metrics_header(metrics_path)
-
-    train_loader, valid_loader = build_train_valid_loaders(cfg)
-
-    model = build_model(cfg).to(device)
-    criterion = build_loss_fn(cfg)
-    optimizer = build_optimizer(cfg, model)
-    scheduler = build_scheduler(cfg, optimizer)
 
     use_wandb = cfg.logging.use_wandb
     experiment_name = get_experiment_name(cfg)
@@ -207,6 +292,19 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
             run_dir=cfg.paths.output_dir,
             device=device,
         )
+
+    apply_sweep_overrides(cfg, logger)
+    save_sweep_config(cfg, logger)
+
+    train_loader, valid_loader = build_train_valid_loaders(cfg)
+
+    model = build_model(cfg).to(device)
+    criterion = build_loss_fn(cfg)
+    log_sweep_config(cfg, logger)
+
+    optimizer = build_optimizer(cfg, model)
+    scheduler = build_scheduler(cfg, optimizer)
+    log_effective_hparams(cfg, logger)
 
     early_stopping_cfg = cfg.early_stopping
     use_early_stopping = early_stopping_cfg.use
@@ -235,6 +333,10 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
             optimizer=optimizer,
             device=device,
         )
+
+        if not torch.isfinite(torch.tensor(train_metrics["loss"])):
+            logger.warning(f"[NaN DETECTED] stopping run early at epoch {epoch}")
+            break
 
         valid_metrics = valid_one_epoch(
             cfg=cfg,
@@ -301,6 +403,10 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
                 f"| {early_stopping_monitor}={best_score:.4f}"
             )
 
+            is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+            if is_sweep:
+                wandb.summary["best_sweep_config"] = dict(wandb.config)
+
             if use_wandb:
                 wandb.log({
                     "best/epoch": epoch,
@@ -350,8 +456,12 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             "best_valid_f1_macro",
         ])
 
+    base_cfg = copy.deepcopy(cfg)
+
     for fold_idx, (train_indices, valid_indices) in enumerate(folds, start=1):
         logger.info(f"[Fold {fold_idx}/{len(folds)}] start")
+
+        cfg = copy.deepcopy(base_cfg)
 
         fold_output_dir = Path(cfg.paths.output_dir) / f"fold_{fold_idx}"
         fold_checkpoint_dir = fold_output_dir / "checkpoints"
@@ -363,18 +473,6 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
         fold_log_dir.mkdir(parents=True, exist_ok=True)
         write_metrics_header(fold_metrics_path)
 
-        train_loader, valid_loader = build_train_valid_loaders_for_fold(
-            cfg=cfg,
-            dataframe=full_df,
-            train_indices=train_indices,
-            valid_indices=valid_indices,
-        )
-
-        model = build_model(cfg).to(device)
-        criterion = build_loss_fn(cfg)
-        optimizer = build_optimizer(cfg, model)
-        scheduler = build_scheduler(cfg, optimizer)
-
         wandb_run = None
         if use_wandb:
             wandb_run = init_wandb_run(
@@ -385,6 +483,24 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 device=device,
                 extra_config={"fold": fold_idx},
             )
+
+        apply_sweep_overrides(cfg, logger)
+        save_sweep_config(cfg, logger)
+
+        train_loader, valid_loader = build_train_valid_loaders_for_fold(
+            cfg=cfg,
+            dataframe=full_df,
+            train_indices=train_indices,
+            valid_indices=valid_indices,
+        )
+
+        model = build_model(cfg).to(device)
+        criterion = build_loss_fn(cfg)
+        log_sweep_config(cfg, logger)
+
+        optimizer = build_optimizer(cfg, model)
+        scheduler = build_scheduler(cfg, optimizer)
+        log_effective_hparams(cfg, logger)
 
         early_stopping_cfg = cfg.early_stopping
         use_early_stopping = early_stopping_cfg.use
@@ -413,6 +529,10 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 optimizer=optimizer,
                 device=device,
             )
+
+            if not torch.isfinite(torch.tensor(train_metrics["loss"])):
+                logger.warning(f"[NaN DETECTED] stopping run early at epoch {epoch}")
+                break
 
             valid_metrics = valid_one_epoch(
                 cfg=cfg,
@@ -478,6 +598,12 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 best_valid_metrics = valid_metrics.copy()
                 early_stopping_counter = 0
                 save_checkpoint(model, fold_best_model_path)
+
+                is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+                if is_sweep:
+                    wandb.summary[f"fold_{fold_idx}_best_sweep_config"] = dict(
+                        wandb.config
+                    )
 
                 logger.info(
                     f"[Fold {fold_idx}/{len(folds)}] best model saved "
