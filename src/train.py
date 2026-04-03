@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import wandb
-import csv
 import copy
+import csv
 from pathlib import Path
 
 import torch
 import wandb
+import yaml
 from dotenv import load_dotenv
 
 from src.config import load_config, parse_args
@@ -23,6 +23,7 @@ from src.engine.trainer import train_one_epoch, valid_one_epoch
 from src.models.model_factory import build_model
 from src.utils.logger import setup_logger
 
+
 def get_device(device_config: str) -> torch.device:
     if device_config == "auto":
         if torch.cuda.is_available():
@@ -32,10 +33,8 @@ def get_device(device_config: str) -> torch.device:
         return torch.device("cpu")
 
     if device_config == "cuda":
-        if not torch.cuda.is_available():
-            msg = "runtime.device is set to 'cuda', but CUDA is not available."
-            raise RuntimeError(msg)
-        return torch.device("cuda")
+        msg = "runtime.device is set to 'cuda', but CUDA is not available."
+        raise RuntimeError(msg)
 
     if device_config == "mps":
         if not torch.backends.mps.is_available():
@@ -49,31 +48,34 @@ def get_device(device_config: str) -> torch.device:
     msg = f"Unsupported runtime.device: {device_config}"
     raise ValueError(msg)
 
-# SWEEP
-def set_by_path(cfg, path: str, value):
+
+def set_by_path(cfg, path: str, value) -> None:
     keys = path.split(".")
     obj = cfg
-    for k in keys[:-1]:
-        if not hasattr(obj, k):
+    for key in keys[:-1]:
+        if not hasattr(obj, key):
             raise KeyError(f"[SWEEP ERROR] Invalid path: {path}")
-        obj = getattr(obj, k)
+        obj = getattr(obj, key)
     setattr(obj, keys[-1], value)
 
-# SWEEP
+
 def get_by_path(cfg, path: str):
     keys = path.split(".")
     obj = cfg
-    for k in keys:
-        obj = getattr(obj, k)
+    for key in keys:
+        obj = getattr(obj, key)
     return obj
+
 
 def to_dict(obj):
     if hasattr(obj, "__dict__"):
         return {k: to_dict(v) for k, v in obj.__dict__.items()}
-    elif isinstance(obj, dict):
+    if isinstance(obj, dict):
         return {k: to_dict(v) for k, v in obj.items()}
-    else:
-        return obj
+    if isinstance(obj, list):
+        return [to_dict(v) for v in obj]
+    return obj
+
 
 def save_checkpoint(model: torch.nn.Module, save_path: str | Path) -> None:
     save_path = Path(save_path)
@@ -99,13 +101,38 @@ def is_metric_improved(
     raise ValueError(msg)
 
 
-def initialize_output_paths(cfg, experiment_root: Path) -> None:
-    cfg.paths.output_dir = str(experiment_root / "outputs")
-    cfg.paths.checkpoint_dir = str(experiment_root / "outputs" / "checkpoints")
-    cfg.paths.log_dir = str(experiment_root / "outputs" / "logs")
-    cfg.inference.checkpoint_path = str(
-        experiment_root / "outputs" / "checkpoints" / "best.pt"
-    )
+def get_experiment_name(cfg) -> str:
+    experiment = getattr(cfg, "experiment", None)
+    experiment_name = getattr(experiment, "name", None)
+
+    if experiment_name:
+        return experiment_name
+
+    return cfg.model.name
+
+
+def resolve_execution_root(*path_candidates: str | Path) -> Path:
+    for path_candidate in path_candidates:
+        path = Path(path_candidate).resolve()
+        config_dir = path.parent if path.is_file() else path
+
+        if (
+            config_dir.name == "configs"
+            and config_dir.parent.parent.name == "experiments"
+        ):
+            return config_dir.parent
+
+    return Path.cwd()
+
+
+def initialize_output_paths(cfg, project_root: Path) -> None:
+    experiment_name = get_experiment_name(cfg)
+    output_root = project_root / "outputs" / experiment_name
+
+    cfg.paths.output_dir = str(output_root)
+    cfg.paths.checkpoint_dir = str(output_root / "checkpoints")
+    cfg.paths.log_dir = str(output_root / "logs")
+    cfg.inference.checkpoint_path = str(output_root / "checkpoints" / "best.pt")
 
 
 def write_metrics_header(metrics_path: Path) -> None:
@@ -149,6 +176,7 @@ def append_metrics_row(
 
 def build_wandb_config(cfg, device: torch.device) -> dict:
     return {
+        "experiment_name": get_experiment_name(cfg),
         "model_name": cfg.model.name,
         "epochs": cfg.train.epochs,
         "train_batch_size": cfg.train.train_batch_size,
@@ -187,80 +215,96 @@ def init_wandb_run(
     )
 
 
+def apply_sweep_overrides(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    sweep_cfg = wandb.config
+
+    for key, value in dict(sweep_cfg).items():
+        if "." not in key:
+            continue
+        set_by_path(cfg, key, value)
+        logger.info(f"[SWEEP APPLY] {key} = {value}")
+
+    wandb.config.update(
+        {key: get_by_path(cfg, key) for key in dict(sweep_cfg).keys() if "." in key},
+        allow_val_change=True,
+    )
+
+
+def save_sweep_config(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    config_save_path = Path(cfg.paths.output_dir) / "config.yaml"
+    config_save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(config_save_path, "w", encoding="utf-8") as f:
+        yaml.dump(to_dict(cfg), f, default_flow_style=False, allow_unicode=True)
+
+    logger.info(f"[SWEEP CONFIG SAVED] {config_save_path}")
+
+
+def log_sweep_config(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    logger.info("===== SWEEP RUN START =====")
+    logger.info(f"[RUN] {wandb.run.name} ({wandb.run.id})")
+    for key in dict(wandb.config).keys():
+        if "." not in key:
+            continue
+        value = get_by_path(cfg, key)
+        logger.info(f"{key}: {value}")
+    logger.info("===========================")
+
+
+def log_effective_hparams(cfg, logger) -> None:
+    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
+    if not is_sweep:
+        return
+
+    logger.info("===== EFFECTIVE HYPERPARAMETERS =====")
+    for key in dict(wandb.config).keys():
+        if "." not in key:
+            continue
+        value = get_by_path(cfg, key)
+        logger.info(f"{key}: {value}")
+    logger.info("====================================")
+
+
 def run_single_split_training(cfg, device: torch.device, logger) -> None:
-    use_wandb = cfg.logging.use_wandb
     metrics_path = Path(cfg.paths.output_dir) / "metrics.csv"
     write_metrics_header(metrics_path)
 
-    # sweep override
-    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-    if is_sweep:
-        
-        sweep_cfg = wandb.config        
+    use_wandb = cfg.logging.use_wandb
+    experiment_name = get_experiment_name(cfg)
 
-        for key, value in dict(sweep_cfg).items():
-            if "." not in key:
-                continue  # 안전장치 (wandb 기본 필드 무시)
-
-            set_by_path(cfg, key, value)
-            logger.info(f"[SWEEP APPLY] {key} = {value}")
-
-        # 실제 cfg → wandb config 동기화
-        wandb.config.update(
-            {key: get_by_path(cfg, key) for key in dict(sweep_cfg).keys() if "." in key},
-            allow_val_change=True,
+    if use_wandb:
+        init_wandb_run(
+            cfg=cfg,
+            run_name=f"{experiment_name}-single-split",
+            group_name=experiment_name,
+            run_dir=cfg.paths.output_dir,
+            device=device,
         )
 
-    # sweep run일 때 config 저장
-    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-    if is_sweep:
-        config_save_path = Path(cfg.paths.output_dir) / "config.yaml"
-        config_save_path.parent.mkdir(parents=True, exist_ok=True)
+    apply_sweep_overrides(cfg, logger)
+    save_sweep_config(cfg, logger)
 
-        import yaml
-
-        with open(config_save_path, "w", encoding="utf-8") as f:
-            yaml.dump(to_dict(cfg), f, default_flow_style=False, allow_unicode=True)
-
-        logger.info(f"[SWEEP CONFIG SAVED] {config_save_path}")
-
-    # dataloader 생성
     train_loader, valid_loader = build_train_valid_loaders(cfg)
 
-    # model 생성
     model = build_model(cfg).to(device)
     criterion = build_loss_fn(cfg)
+    log_sweep_config(cfg, logger)
 
-    # sweep config 로그
-    if wandb.run is not None:
-        is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-        if is_sweep:
-            logger.info("===== SWEEP RUN START =====")
-            logger.info(f"[RUN] {wandb.run.name} ({wandb.run.id})")
-            for key in dict(wandb.config).keys():
-                if "." not in key:
-                    continue
-
-                value = get_by_path(cfg, key)
-                logger.info(f"{key}: {value}")
-            logger.info("===========================")
-
-    # optimizer
     optimizer = build_optimizer(cfg, model)
-
-    # optimizer 실제 값 검증 로그
-    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-    if is_sweep:
-        logger.info("===== EFFECTIVE HYPERPARAMETERS =====")
-        for key in dict(wandb.config).keys():
-            if "." not in key:
-                continue
-
-            value = get_by_path(cfg, key)
-            logger.info(f"{key}: {value}")
-        logger.info("====================================")
-
     scheduler = build_scheduler(cfg, optimizer)
+    log_effective_hparams(cfg, logger)
 
     early_stopping_cfg = cfg.early_stopping
     use_early_stopping = early_stopping_cfg.use
@@ -289,7 +333,7 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
             optimizer=optimizer,
             device=device,
         )
-        # NaN / inf pruning
+
         if not torch.isfinite(torch.tensor(train_metrics["loss"])):
             logger.warning(f"[NaN DETECTED] stopping run early at epoch {epoch}")
             break
@@ -305,14 +349,13 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
         if scheduler is not None:
             if isinstance(scheduler, dict):
                 warmup_epochs = scheduler["warmup_epochs"]
-
                 if epoch <= warmup_epochs:
                     scheduler["warmup"].step()
                 else:
                     scheduler["main"].step()
             else:
                 scheduler.step()
-            
+
         current_lr = optimizer.param_groups[0]["lr"]
 
         append_metrics_row(metrics_path, epoch, train_metrics, valid_metrics)
@@ -360,7 +403,6 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
                 f"| {early_stopping_monitor}={best_score:.4f}"
             )
 
-            # sweep best config 저장
             is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
             if is_sweep:
                 wandb.summary["best_sweep_config"] = dict(wandb.config)
@@ -392,8 +434,6 @@ def run_single_split_training(cfg, device: torch.device, logger) -> None:
 
 
 def run_kfold_training(cfg, device: torch.device, logger) -> None:
-    use_wandb = cfg.logging.use_wandb
-
     full_df = load_train_dataframe(cfg)
     folds = build_kfold_splits(cfg, full_df)
 
@@ -402,7 +442,8 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
 
     fold_results: list[dict[str, float | int]] = []
     log_interval = max(1, int(cfg.logging.log_interval))
-    kfold_group_name = f"{cfg.model.name}-kfold"
+    use_wandb = cfg.logging.use_wandb
+    kfold_group_name = f"{get_experiment_name(cfg)}-kfold"
 
     with open(summary_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -416,10 +457,10 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
         ])
 
     base_cfg = copy.deepcopy(cfg)
-    
+
     for fold_idx, (train_indices, valid_indices) in enumerate(folds, start=1):
         logger.info(f"[Fold {fold_idx}/{len(folds)}] start")
-        # fold마다 독립 config
+
         cfg = copy.deepcopy(base_cfg)
 
         fold_output_dir = Path(cfg.paths.output_dir) / f"fold_{fold_idx}"
@@ -432,38 +473,20 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
         fold_log_dir.mkdir(parents=True, exist_ok=True)
         write_metrics_header(fold_metrics_path)
 
-        # sweep override
-        is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-        if is_sweep:
-            sweep_cfg = wandb.config
-
-            for key, value in dict(sweep_cfg).items():
-                if "." not in key:
-                    continue  # 안전장치 (wandb 기본 필드 무시)
-
-                set_by_path(cfg, key, value)
-                logger.info(f"[SWEEP APPLY] {key} = {value}")
-
-            # 실제 cfg → wandb config 동기화
-            wandb.config.update(
-                {key: get_by_path(cfg, key) for key in dict(sweep_cfg).keys() if "." in key},
-                allow_val_change=True,
+        wandb_run = None
+        if use_wandb:
+            wandb_run = init_wandb_run(
+                cfg=cfg,
+                run_name=f"{get_experiment_name(cfg)}-fold-{fold_idx}",
+                group_name=kfold_group_name,
+                run_dir=str(fold_output_dir),
+                device=device,
+                extra_config={"fold": fold_idx},
             )
 
-        # sweep run일 때 config 저장
-        is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-        if is_sweep:
-            config_save_path = Path(cfg.paths.output_dir) / "config.yaml"
-            config_save_path.parent.mkdir(parents=True, exist_ok=True)
+        apply_sweep_overrides(cfg, logger)
+        save_sweep_config(cfg, logger)
 
-            import yaml
-
-            with open(config_save_path, "w", encoding="utf-8") as f:
-                yaml.dump(to_dict(cfg), f, default_flow_style=False, allow_unicode=True)
-
-            logger.info(f"[SWEEP CONFIG SAVED] {config_save_path}")
-
-        # dataloader 생성
         train_loader, valid_loader = build_train_valid_loaders_for_fold(
             cfg=cfg,
             dataframe=full_df,
@@ -471,40 +494,13 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             valid_indices=valid_indices,
         )
 
-        # model 생성
         model = build_model(cfg).to(device)
         criterion = build_loss_fn(cfg)
+        log_sweep_config(cfg, logger)
 
-        # sweep config 로그
-        if wandb.run is not None:
-            is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-            if is_sweep:
-                logger.info("===== SWEEP RUN START =====")
-                logger.info(f"[RUN] {wandb.run.name} ({wandb.run.id})")
-                for key in dict(wandb.config).keys():
-                    if "." not in key:
-                        continue
-
-                    value = get_by_path(cfg, key)
-                    logger.info(f"{key}: {value}")
-                logger.info("===========================")          
-
-        # optimizer
         optimizer = build_optimizer(cfg, model)
-
-        # optimizer 실제 값 검증 로그
-        is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-        if is_sweep:
-            logger.info("===== EFFECTIVE HYPERPARAMETERS =====")
-            for key in dict(wandb.config).keys():
-                if "." not in key:
-                    continue
-
-                value = get_by_path(cfg, key)
-                logger.info(f"{key}: {value}")
-            logger.info("====================================") 
-
         scheduler = build_scheduler(cfg, optimizer)
+        log_effective_hparams(cfg, logger)
 
         early_stopping_cfg = cfg.early_stopping
         use_early_stopping = early_stopping_cfg.use
@@ -533,7 +529,7 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 optimizer=optimizer,
                 device=device,
             )
-            # NaN / inf pruning
+
             if not torch.isfinite(torch.tensor(train_metrics["loss"])):
                 logger.warning(f"[NaN DETECTED] stopping run early at epoch {epoch}")
                 break
@@ -549,16 +545,14 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             if scheduler is not None:
                 if isinstance(scheduler, dict):
                     warmup_epochs = scheduler["warmup_epochs"]
-
                     if epoch <= warmup_epochs:
                         scheduler["warmup"].step()
                     else:
                         scheduler["main"].step()
                 else:
                     scheduler.step()
-            
-            current_lr = optimizer.param_groups[0]["lr"]
 
+            current_lr = optimizer.param_groups[0]["lr"]
 
             append_metrics_row(fold_metrics_path, epoch, train_metrics, valid_metrics)
 
@@ -605,10 +599,11 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
                 early_stopping_counter = 0
                 save_checkpoint(model, fold_best_model_path)
 
-                # sweep best config 저장
                 is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
                 if is_sweep:
-                    wandb.summary[f"fold_{fold_idx}_best_sweep_config"] = dict(wandb.config)
+                    wandb.summary[f"fold_{fold_idx}_best_sweep_config"] = dict(
+                        wandb.config
+                    )
 
                 logger.info(
                     f"[Fold {fold_idx}/{len(folds)}] best model saved "
@@ -673,11 +668,13 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             f"| best_valid_f1_macro={best_valid_metrics['f1_macro']:.4f}"
         )
 
-        wandb.summary["best_epoch"] = best_epoch
-        wandb.summary["best_valid_loss"] = best_valid_metrics["loss"]
-        wandb.summary["best_valid_accuracy"] = best_valid_metrics["accuracy"]
-        wandb.summary["best_valid_f1_micro"] = best_valid_metrics["f1_micro"]
-        wandb.summary["best_valid_f1_macro"] = best_valid_metrics["f1_macro"]            
+        if use_wandb and wandb_run is not None:
+            wandb.summary["best_epoch"] = best_epoch
+            wandb.summary["best_valid_loss"] = best_valid_metrics["loss"]
+            wandb.summary["best_valid_accuracy"] = best_valid_metrics["accuracy"]
+            wandb.summary["best_valid_f1_micro"] = best_valid_metrics["f1_micro"]
+            wandb.summary["best_valid_f1_macro"] = best_valid_metrics["f1_macro"]
+            wandb.finish()
 
     f1_macro_scores = [float(result["best_valid_f1_macro"]) for result in fold_results]
     mean_f1_macro = sum(f1_macro_scores) / len(f1_macro_scores)
@@ -696,9 +693,9 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
     logger.info(f"[KFold] std_valid_f1_macro={std_f1_macro:.4f}")
 
     if use_wandb:
-        summary_run = init_wandb_run(
+        init_wandb_run(
             cfg=cfg,
-            run_name="kfold-summary",
+            run_name=f"{get_experiment_name(cfg)}-kfold-summary",
             group_name=kfold_group_name,
             run_dir=cfg.paths.output_dir,
             device=device,
@@ -714,13 +711,6 @@ def run_kfold_training(cfg, device: torch.device, logger) -> None:
             ]
         wandb.finish()
 
-def get_experiment_root(args) -> Path:
-    """
-    experiments/<user>/ 기준으로 자동 탐색
-    """
-    train_path = Path(args.train).resolve()
-    # parents[2] = experiments/<user>
-    return train_path.parents[2]
 
 def main() -> None:
     load_dotenv(dotenv_path=Path(".env"), override=True)
@@ -733,67 +723,21 @@ def main() -> None:
         inference_path=args.inference,
         model_path=args.model,
     )
-    # sweep override 반영
-    if args.lr is not None:
-        cfg.optimizer.lr = args.lr
 
-    if args.weight_decay is not None:
-        cfg.optimizer.weight_decay = args.weight_decay
-
-    if args.train_batch_size is not None:
-        cfg.train.train_batch_size = args.train_batch_size
-
-    if args.label_smoothing is not None:
-        cfg.loss.label_smoothing = args.label_smoothing
-
-    # use_wandb 설정
-    use_wandb = cfg.logging.use_wandb
-
-    # use_wandb 초기화
-    wandb.init(
-        project=cfg.logging.wandb_project,
-        entity=cfg.logging.wandb_entity,
-        config=to_dict(cfg),
-        dir=cfg.paths.output_dir,
-        mode="online" if use_wandb else "disabled",
+    project_root = resolve_execution_root(
+        args.data,
+        args.train,
+        args.inference,
+        args.model,
     )
-    
-    # sweep 여부 확인
-    is_sweep = wandb.run is not None and wandb.run.sweep_id is not None
-
-    experiment_root = get_experiment_root(args)   
-
-    if is_sweep:
-        # sweep_outputs root 생성
-        sweep_root = experiment_root / "sweep_outputs"
-        sweep_root.mkdir(parents=True, exist_ok=True)
-
-        # timestamp 기반 sweep 폴더
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        sweep_dir = sweep_root / f"sweep_{timestamp}"
-        sweep_dir.mkdir(parents=True, exist_ok=True)
-
-        # run별 폴더
-        run_name = wandb.run.name if wandb.run is not None else "run"
-        run_dir = sweep_dir / run_name
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        # cfg output 경로 override
-        cfg.paths.output_dir = str(run_dir / "outputs")
-        cfg.paths.checkpoint_dir = str(run_dir / "checkpoints")
-        cfg.paths.log_dir = str(run_dir / "logs")
-
-    else:
-        initialize_output_paths(cfg, experiment_root)
+    initialize_output_paths(cfg, project_root)
 
     logger = setup_logger("src.train", cfg.paths.log_dir)
-    logger.info(f"wandb.run: {wandb.run}")
-    logger.info(f"sweep_id: {getattr(wandb.run, 'sweep_id', None)}")
-    logger.info(f"is_sweep: {wandb.run.sweep_id is not None}")
 
     device = get_device(cfg.runtime.device)
     logger.info(f"[DEVICE: {device.type.upper()}]")
+    logger.info(f"[EXPERIMENT: {get_experiment_name(cfg)}]")
+    logger.info(f"[OUTPUT DIR: {cfg.paths.output_dir}]")
 
     if cfg.split.method == "stratified_kfold":
         run_kfold_training(cfg=cfg, device=device, logger=logger)
