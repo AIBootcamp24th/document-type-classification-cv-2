@@ -1,7 +1,7 @@
 # 학습 하이퍼파라미터 담당
 
 train:
-  epochs: 30
+  epochs: 1
   train_batch_size: 16
   valid_batch_size: 8
   grad_accum_steps: 1
@@ -18,7 +18,7 @@ optimizer:
 scheduler:
   use: true
   name: cosineannealinglr
-  t_max: 27 # warmup use:true인 경우 epochs - warmup_epochs / warmup use:false인 경우, epochs에 일치
+  t_max: 10 # warmup use:true인 경우 epochs - warmup_epochs / warmup use:false인 경우, epochs에 일치
   eta_min: 0.000001
   step_unit: epoch
 
