@@ -59,13 +59,11 @@ def build_kfold_checkpoint_paths(
     output_dir = Path(output_dir).resolve()
     checkpoint_path = Path(checkpoint_path)
 
-    relative_checkpoint_path = checkpoint_path.relative_to("outputs")
+    relative_checkpoint_path = Path("checkpoints") / "best.pt"
 
     for fold_idx in range(1, n_splits + 1):
         fold_checkpoint_path = (
-            output_dir
-            / f"fold_{fold_idx}"
-            / relative_checkpoint_path
+            output_dir / f"fold_{fold_idx}" / relative_checkpoint_path
         )
 
         if not fold_checkpoint_path.exists():
@@ -78,7 +76,11 @@ def build_kfold_checkpoint_paths(
     return checkpoint_paths
 
 
-def load_ensemble_models(cfg, device: torch.device, checkpoint_paths: list[Path]) -> list[torch.nn.Module]:
+def load_ensemble_models(
+    cfg,
+    device: torch.device,
+    checkpoint_paths: list[Path],
+) -> list[torch.nn.Module]:
     models_list: list[torch.nn.Module] = []
 
     for checkpoint_path in checkpoint_paths:
@@ -88,6 +90,40 @@ def load_ensemble_models(cfg, device: torch.device, checkpoint_paths: list[Path]
         models_list.append(model)
 
     return models_list
+
+
+def get_experiment_name(cfg) -> str:
+    experiment = getattr(cfg, "experiment", None)
+    experiment_name = getattr(experiment, "name", None)
+
+    if experiment_name:
+        return experiment_name
+
+    return cfg.model.name
+
+
+def resolve_execution_root(*path_candidates: str | Path) -> Path:
+    for path_candidate in path_candidates:
+        path = Path(path_candidate).resolve()
+        config_dir = path.parent if path.is_file() else path
+
+        if (
+            config_dir.name == "configs"
+            and config_dir.parent.parent.name == "experiments"
+        ):
+            return config_dir.parent
+
+    return Path.cwd()
+
+
+def initialize_output_paths(cfg, project_root: Path) -> None:
+    experiment_name = get_experiment_name(cfg)
+    output_root = project_root / "outputs" / experiment_name
+
+    cfg.paths.output_dir = str(output_root)
+    cfg.paths.checkpoint_dir = str(output_root / "checkpoints")
+    cfg.paths.log_dir = str(output_root / "logs")
+    cfg.inference.checkpoint_path = str(output_root / "checkpoints" / "best.pt")
 
 
 def main() -> None:
@@ -101,16 +137,20 @@ def main() -> None:
         model_path=args.model,
     )
 
-    experiment_root = Path(args.train).resolve().parents[1]
-
-    cfg.paths.output_dir = str(experiment_root / "outputs")
-    cfg.paths.checkpoint_dir = str(experiment_root / "outputs" / "checkpoints")
-    cfg.paths.log_dir = str(experiment_root / "outputs" / "logs")
+    project_root = resolve_execution_root(
+        args.data,
+        args.train,
+        args.inference,
+        args.model,
+    )
+    initialize_output_paths(cfg, project_root)
 
     logger = setup_logger("src.infer", cfg.paths.log_dir)
 
     device = get_device(cfg.runtime.device)
     logger.info(f"[DEVICE: {device.type.upper()}]")
+    logger.info(f"[EXPERIMENT: {get_experiment_name(cfg)}]")
+    logger.info(f"[OUTPUT DIR: {cfg.paths.output_dir}]")
 
     test_loader = build_test_loader_from_config(cfg)
 
