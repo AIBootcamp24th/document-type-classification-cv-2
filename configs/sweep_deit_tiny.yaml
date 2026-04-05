@@ -1,0 +1,48 @@
+program: src/train.py
+
+method: bayes
+
+entity: cv-team2
+project: document-type-classification
+
+metric:
+  name: valid/f1_macro
+  goal: maximize
+
+command:
+  - ${env}
+  - python
+  - -m
+  - src.train
+  - --base
+  - configs/base.yaml
+  - --data
+  - configs/data.yaml
+  - --train
+  - configs/train.yaml
+  - --inference
+  - configs/inference.yaml
+  - --model
+  - configs/model/deit_tiny.yaml
+
+parameters:
+  logging.use_wandb:
+    value: true
+
+  optimizer.lr:
+    values: [0.00025, 0.0004]
+
+  optimizer.weight_decay:
+    values: [0.00005, 0.0002]
+
+  train.train_batch_size:
+    values: [16, 32]
+
+  loss.label_smoothing:
+    values: [0.05, 0.1]
+
+  scheduler.warmup.warmup_epochs:
+    values: [3, 5, 7]
+
+  scheduler.t_max:
+    values: [20, 22, 25]

@@ -238,9 +238,51 @@ python -m src.infer_ensemble \
 
 ---
 
-## 실행 흐름
+## [공용] Hyperparameter Sweep (W&B)
 
+공용 앙상블은 여러 모델을 사용하므로 각 모델별로 sweep을 개별적으로 수행해야 합니다.
+
+### 기본 원칙
+- sweep은 "모델 1개 기준"으로 수행
+- 앙상블 모델 수만큼 sweep을 따로 실행
+- 각 모델별 best config를 찾은 뒤 최종 앙상블 진행
+
+### sweep config 위치
+```bash
+configs/
+  sweep_resnet50.yaml
+  sweep_efficientnet_b0.yaml
+  sweep_convnext_tiny.yaml
+  sweep_deit_tiny.yaml
+```
+
+### sweep 실행 방법
+```bash
+1. sweep 생성
+   python -m dotenv run -- wandb sweep configs/sweep_resnet50.yaml
+
+2. agent 실행
+   python -m dotenv run -- wandb agent cv-team2/document-type-classification/<SWEEP_ID>
+```
+
+### 모델별 실행
+```bash
+python -m dotenv run -- wandb sweep configs/sweep_resnet50.yaml
+python -m dotenv run -- wandb sweep configs/sweep_efficientnet_b0.yaml
+python -m dotenv run -- wandb sweep configs/sweep_convnext_tiny.yaml
+python -m dotenv run -- wandb sweep configs/sweep_deit_tiny.yaml
+```
+
+### 주의 사항
+- sweep.yaml의 --model 경로는 반드시 configs/model/ 기준으로 설정
+- 개인 experiments 경로 사용 금지
+- sweep은 모델별로 따로 실행해야 함 (한 파일에서 여러 모델 처리 불가)
+
+
+## 실행 흐름 (sweep 포함)
 ```text
+개인 실험 → 공용 모델 학습 → 모델별 sweep → best config 확정 → 앙상블
+
 개인 실험:
 train → infer → infer_valid_ensemble
 
