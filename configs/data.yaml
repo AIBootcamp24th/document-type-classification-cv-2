@@ -12,8 +12,9 @@ image:
   std: [0.229, 0.224, 0.225]
 
 split:
-  method: stratified_kfold
+  method: stratified_kfold #stratified_kfold
   n_splits: 5
+  #valid_ratio: 0.2
   shuffle: true
   random_state: 42
   stratify: true
@@ -96,8 +97,10 @@ augmentation:
       height: 512
       width: 512
 
-    normalize:
-      p: 1.0
+    # TTA use:false의 경우, normalize & to_tensor 활성화
+    # TTA use:true의 경우, 이중 normalize 발생 → 성능 하락 원인되므로 normalize & to_tensor 비활성화
+    # normalize:
+    #   p: 1.0
 
-    to_tensor:
-      p: 1.0
+    # to_tensor:
+    #   p: 1.0

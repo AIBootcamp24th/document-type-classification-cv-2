@@ -6,6 +6,10 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+import numpy as np
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
 from src.config import load_config, parse_args
 from src.dataset.loader import build_test_loader_from_config
 from src.models.model_factory import build_model
@@ -92,6 +96,56 @@ def load_ensemble_models(
     return models_list
 
 
+def build_tta_transforms_from_cfg(cfg):
+    tta_cfg = getattr(cfg.inference, "tta", None)
+
+    if tta_cfg is None or not getattr(tta_cfg, "use", False):
+        return []
+
+    transforms_cfg = getattr(tta_cfg, "transforms", [])
+    tta_transforms = []
+
+    for t in transforms_cfg:
+        t_type = t["type"]
+        aug_list = []
+
+        if t_type == "original":
+            pass
+
+        elif t_type == "rotate":
+            if "limit" not in t:
+                raise ValueError("rotate TTA requires 'limit' in config")
+
+            limit = t["limit"]
+
+            aug_list.append(
+                A.Rotate(limit=(limit, limit), p=1.0)
+            )
+
+        elif t_type == "brightness":
+            if "brightness_limit" not in t or "contrast_limit" not in t:
+                raise ValueError("brightness TTA requires brightness_limit and contrast_limit")
+
+            aug_list.append(
+                A.RandomBrightnessContrast(
+                    brightness_limit=t["brightness_limit"],
+                    contrast_limit=t["contrast_limit"],
+                    p=1.0
+                )
+            )
+
+        else:
+            raise ValueError(f"Unsupported TTA type: {t_type}")
+
+        # 공통 후처리
+        aug_list.append(A.Normalize(mean=cfg.image.mean, std=cfg.image.std))
+        aug_list.append(ToTensorV2())
+
+        tta_transforms.append(A.Compose(aug_list))
+
+    return tta_transforms
+
+
 def get_experiment_name(cfg) -> str:
     experiment = getattr(cfg, "experiment", None)
     experiment_name = getattr(experiment, "name", None)
@@ -173,43 +227,119 @@ def main() -> None:
         checkpoint_paths=checkpoint_paths,
     )
 
+    # TTA 설정
+    tta_cfg = getattr(cfg.inference, "tta", None)
+
+    if tta_cfg is not None:
+        use_tta = getattr(tta_cfg, "use", False)
+    else:
+        use_tta = False
+        tta_transforms_cfg = []
+
+    if use_tta:
+        tta_transforms = build_tta_transforms_from_cfg(cfg)
+        tta_size = len(tta_transforms)
+    else:
+        tta_transforms = []
+        tta_size = 1
+       
+    logger.info(f"[TTA USE : {use_tta}]")
+    logger.info(f"[TTA SIZE: {tta_size}]")
+
     preds = []
     image_names = []
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="inference"):
-            images = batch["image"].to(device)
 
-            logits_sum = None
+            # TTA OFF
+            if not use_tta:
+                images = batch["image"]
+            
+                if images.ndim == 4 and images.shape[-1] == 3:
+                    images = images.permute(0, 3, 1, 2)
 
-            for model in ensemble_models:
-                outputs = model(images)
+                images = images.to(device).float()    
 
-                if logits_sum is None:
-                    logits_sum = outputs
-                else:
-                    logits_sum += outputs
+                logits_sum = None
 
-            if logits_sum is None:
-                raise RuntimeError("No ensemble outputs were produced.")
+                for model in ensemble_models:
+                    outputs = model(images)
 
-            logits_mean = logits_sum / len(ensemble_models)
-            pred = torch.argmax(logits_mean, dim=1)
+                    if logits_sum is None:
+                        logits_sum = outputs
+                    else:
+                        logits_sum += outputs
 
-            preds.extend(pred.cpu().numpy())
-            image_names.extend(batch["image_name"])
+                logits_mean = logits_sum / len(ensemble_models)
+                probs = torch.softmax(logits_mean, dim=1)
 
-    submission = pd.DataFrame({
-        cfg.data.image_col: image_names,
-        cfg.inference.prediction_col: preds,
-    })
+                preds.extend(probs.cpu().numpy())
+                image_names.extend(batch["image_name"])
 
-    save_path = Path(cfg.paths.output_dir) / cfg.submission.file_name
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+            # TTA ON  
+            else:
+                images = batch["image"]
+                batch_image_names = batch["image_name"]
 
-    submission.to_csv(save_path, index=False)
+                tta_logits_sum = None
 
-    logger.info(f"submission saved: {save_path}")
+                for tta_transform in tta_transforms:
+                    tta_images = []
+
+                    for img in images:
+                        img_np = img.permute(1, 2, 0).cpu().numpy()
+
+                        augmented = tta_transform(image=img_np)
+                        tta_img = augmented["image"]
+
+                        if isinstance(tta_img, np.ndarray):
+                            tta_img = torch.from_numpy(tta_img).permute(2, 0, 1).float()
+                        elif isinstance(tta_img, torch.Tensor):
+                            if tta_img.shape[0] != 3:
+                                tta_img = tta_img.permute(2, 0, 1)
+
+                        tta_images.append(tta_img)
+
+                    tta_images = torch.stack(tta_images)
+
+                    if tta_images.shape[1] != 3:
+                        tta_images = tta_images.permute(0, 3, 1, 2)
+
+                    tta_images = tta_images.to(device)
+
+                    fold_logits_sum = None
+
+                    for model in ensemble_models:
+                        outputs = model(tta_images)
+
+                        if fold_logits_sum is None:
+                            fold_logits_sum = outputs
+                        else:
+                            fold_logits_sum += outputs
+
+                    fold_logits_mean = fold_logits_sum / len(ensemble_models)
+
+                    if tta_logits_sum is None:
+                        tta_logits_sum = fold_logits_mean
+                    else:
+                        tta_logits_sum += fold_logits_mean
+
+                final_logits = tta_logits_sum / tta_size
+                probs = torch.softmax(final_logits, dim=1)
+
+                preds.extend(probs.cpu().numpy())
+                image_names.extend(batch_image_names)
+
+    probs_array = np.array(preds)
+
+    save_path = Path(cfg.paths.output_dir) / "probs.npy"
+    np.save(save_path, probs_array)
+
+    names_path = Path(cfg.paths.output_dir) / "image_names.npy"
+    np.save(names_path, np.array(image_names))
+
+    logger.info(f"probs saved: {save_path}")
 
 
 if __name__ == "__main__":

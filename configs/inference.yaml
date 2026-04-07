@@ -4,8 +4,17 @@ inference:
   checkpoint_path: outputs/checkpoints/best.pt     # 추론시 불러올 모델 경로
   prediction_col: target     # 제출 파일에 예측값 컬럼명을 통일하기 위한 값
   tta:
-    use: false
-    num_augments: 1
+    use: true
+
+    transforms:
+      - type: original
+
+      - type: rotate
+        limit: 3
+
+      - type: brightness
+        brightness_limit: 0.05
+        contrast_limit: 0.05
 
 submission:
   save_csv: true
